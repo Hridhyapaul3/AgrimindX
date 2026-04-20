@@ -150,13 +150,11 @@
           </select>
 
           <label>Preferred date</label>
-          <input type="date" name="preferred_date" value="{{ request.form.get('preferred_date', '') }}" required/>
+          <input type="date" id="preferred-date" name="preferred_date" value="{{ request.form.get('preferred_date', '') }}" required/>
 
-          <label>Preferred time</label>
-          <select name="preferred_time" id="preferred-time" required disabled>
-            <option value="">Select expert first</option>
-          </select>
-          <div class="hint" id="slot-hint">Choose an expert farmer to see the exact three available consultation slots.</div>
+          <label>Consultation slot</label>
+          <input type="text" id="preferred-time" name="preferred_time" readonly placeholder="Select a date and expert to auto-fill the slot" value="{{ request.form.get('preferred_time', '') }}" required/>
+          <div class="hint" id="slot-hint">Choose an expert farmer and a valid date to auto-fill the consultation slot.</div>
 
           <label>Your question</label>
           <textarea name="question" placeholder="Explain your farming doubt..." required>{{ request.form.get('question', '') }}</textarea>
@@ -169,47 +167,140 @@
 
   <script>
     const expertSelect = document.getElementById('expert-farmer');
-    const timeSelect = document.getElementById('preferred-time');
+    const timeField = document.getElementById('preferred-time');
     const slotHint = document.getElementById('slot-hint');
+    const preferredDateInput = document.getElementById('preferred-date');
+    const weekdayTokenToIndex = {
+      mon: 0,
+      monday: 0,
+      tue: 1,
+      tues: 1,
+      tuesday: 1,
+      wed: 2,
+      wednesday: 2,
+      thu: 3,
+      thur: 3,
+      thurs: 3,
+      thursday: 3,
+      fri: 4,
+      friday: 4,
+      sat: 5,
+      saturday: 5,
+      sun: 6,
+      sunday: 6,
+    };
 
-    function setTimeOptions(slots, selectedTime) {
-      timeSelect.innerHTML = '';
+    let activeAllowedWeekdays = null;
 
-      if (!slots.length) {
-        const emptyOption = document.createElement('option');
-        emptyOption.value = '';
-        emptyOption.textContent = 'Select expert first';
-        timeSelect.appendChild(emptyOption);
-        timeSelect.disabled = true;
-        slotHint.textContent = 'Choose an expert farmer to see the exact three available consultation slots.';
-        return;
+    function toIsoDateLocal(d) {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function extractAllowedWeekdays(slots) {
+      const allowed = new Set();
+      slots.forEach((slot) => {
+        const raw = String(slot || '').trim().toLowerCase();
+        if (!raw) return;
+        const token = raw.split(/\s+/)[0].replace(/[^a-z]/g, '');
+        if (Object.prototype.hasOwnProperty.call(weekdayTokenToIndex, token)) {
+          allowed.add(weekdayTokenToIndex[token]);
+        }
+      });
+      return allowed;
+    }
+
+    function validatePreferredDate() {
+      if (!preferredDateInput.value) {
+        preferredDateInput.setCustomValidity('');
+        return true;
       }
 
-      const defaultOption = document.createElement('option');
-      defaultOption.value = '';
-      defaultOption.textContent = 'Select a consultation slot';
-      timeSelect.appendChild(defaultOption);
+      const selected = new Date(`${preferredDateInput.value}T00:00:00`);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (Number.isNaN(selected.getTime())) {
+        preferredDateInput.setCustomValidity('Invalid date selected.');
+        return false;
+      }
 
-      slots.forEach((slot) => {
-        const option = document.createElement('option');
-        option.value = slot;
-        option.textContent = slot;
-        if (slot === selectedTime) {
-          option.selected = true;
-        }
-        timeSelect.appendChild(option);
-      });
+      if (selected < today) {
+        preferredDateInput.setCustomValidity('Please choose today or a future date.');
+        return false;
+      }
 
-      timeSelect.disabled = false;
-      slotHint.textContent = `Available slots: ${slots.join(', ')}`;
+      if (activeAllowedWeekdays && activeAllowedWeekdays.size > 0 && !activeAllowedWeekdays.has(selected.getDay() === 0 ? 6 : selected.getDay() - 1)) {
+        preferredDateInput.setCustomValidity('Please choose a date that matches the selected expert\'s available weekdays.');
+        return false;
+      }
+
+      preferredDateInput.setCustomValidity('');
+      return true;
+    }
+
+    function parseSlotWeekdayAndTime(slot) {
+      const raw = String(slot || '').trim();
+      if (!raw) return null;
+      const parts = raw.split(/\s+/);
+      if (parts.length < 2) return null;
+      const token = parts[0].replace(/[^a-z]/gi, '').toLowerCase();
+      const time = parts.slice(1).join(' ').trim();
+      if (!time || !Object.prototype.hasOwnProperty.call(weekdayTokenToIndex, token)) return null;
+      return { weekdayIndex: weekdayTokenToIndex[token], time, label: raw };
     }
 
     function syncSlots() {
       const selectedOption = expertSelect.options[expertSelect.selectedIndex];
       const slots = selectedOption && selectedOption.dataset.slots ? JSON.parse(selectedOption.dataset.slots) : [];
-      const selectedTime = {{ request.form.get('preferred_time', '') | tojson }};
-      setTimeOptions(Array.isArray(slots) ? slots : [], selectedTime);
+
+      const safeSlots = Array.isArray(slots) ? slots : [];
+      activeAllowedWeekdays = extractAllowedWeekdays(safeSlots);
+      validatePreferredDate();
+
+      if (activeAllowedWeekdays && activeAllowedWeekdays.size > 0) {
+        const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const labels = Array.from(activeAllowedWeekdays).sort((a, b) => a - b).map((idx) => dayNames[idx]);
+        slotHint.textContent = `Available slots: ${safeSlots.join(', ')}. Allowed days: ${labels.join(', ')}.`;
+      } else if (safeSlots.length) {
+        slotHint.textContent = `Available slots: ${safeSlots.join(', ')}.`;
+      }
+
+      updateAutoSlot();
     }
+
+    function updateAutoSlot() {
+      const selectedOption = expertSelect.options[expertSelect.selectedIndex];
+      const slots = selectedOption && selectedOption.dataset.slots ? JSON.parse(selectedOption.dataset.slots) : [];
+      const safeSlots = Array.isArray(slots) ? slots : [];
+      const selectedDate = preferredDateInput.value ? new Date(`${preferredDateInput.value}T00:00:00`) : null;
+
+      if (!selectedDate || Number.isNaN(selectedDate.getTime()) || !safeSlots.length) {
+        timeField.value = '';
+        timeField.placeholder = 'Select a date and expert to auto-fill the slot';
+        return;
+      }
+
+      const weekdayIndex = selectedDate.getDay() === 0 ? 6 : selectedDate.getDay() - 1;
+      const matchedSlot = safeSlots.map(parseSlotWeekdayAndTime).find((item) => item && item.weekdayIndex === weekdayIndex);
+
+      if (matchedSlot) {
+        timeField.value = matchedSlot.label;
+        timeField.placeholder = matchedSlot.label;
+        return;
+      }
+
+      timeField.value = '';
+      timeField.placeholder = 'No slot available for this date';
+    }
+
+    preferredDateInput.min = toIsoDateLocal(new Date());
+    preferredDateInput.addEventListener('input', () => {
+      validatePreferredDate();
+      preferredDateInput.reportValidity();
+      updateAutoSlot();
+    });
 
     expertSelect.addEventListener('change', syncSlots);
     syncSlots();

@@ -64,23 +64,6 @@ python app.py
 
 Visit **http://localhost:5000**
 
-### 3.1 Enable booking confirmation emails
-
-1. Copy `.env.example` to `.env` in the project root.
-2. Fill these values in `.env`:
-  - `SMTP_HOST`
-  - `SMTP_PORT`
-  - `SMTP_USE_TLS`
-  - `SMTP_USERNAME`
-  - `SMTP_PASSWORD`
-  - `SMTP_FROM_EMAIL`
-3. Restart the app.
-
-Notes:
-- For Gmail, use an **App Password** (not your normal account password).
-- If SMTP is missing or invalid, booking is still saved but email cannot be delivered.
-- Admin can verify delivery from **Admin Dashboard → Email Delivery → Send Test Email**.
-
 ### 4. Use the REST API
 
 ```bash

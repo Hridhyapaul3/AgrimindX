@@ -240,50 +240,6 @@
       </div>
 
       <div class="card">
-        <h2>Prediction History</h2>
-        {% if predictions %}
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Time (IST)</th>
-              <th>User</th>
-              <th>Crop</th>
-              <th>Confidence</th>
-              <th>N</th>
-              <th>P</th>
-              <th>K</th>
-              <th>Temp</th>
-              <th>Humidity</th>
-              <th>pH</th>
-              <th>Rainfall</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for p in predictions %}
-            <tr>
-              <td>{{ loop.index }}</td>
-              <td>{{ p.timestamp | localtime('%Y-%m-%d %H:%M') }}</td>
-              <td>{{ p.owner_username if p.owner_username else 'N/A' }}</td>
-              <td>{{ p.result }}</td>
-              <td>{{ p.confidence }}%</td>
-              <td>{{ p.N }}</td>
-              <td>{{ p.P }}</td>
-              <td>{{ p.K }}</td>
-              <td>{{ p.temperature }}</td>
-              <td>{{ p.humidity }}</td>
-              <td>{{ p.ph }}</td>
-              <td>{{ p.rainfall }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <div class="empty">No prediction history found.</div>
-        {% endif %}
-      </div>
-
-      <div class="card">
         <h2>Farmer Bookings</h2>
         {% if bookings %}
         <table>

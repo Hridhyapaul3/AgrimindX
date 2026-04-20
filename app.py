@@ -11,14 +11,11 @@ Improvements:
 """
 
 from functools import wraps
-from datetime import datetime, timedelta
-from email.message import EmailMessage
-import hashlib
+from datetime import datetime, timedelta, date
 import importlib
 import os
 import json
 import re
-import smtplib
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -181,6 +178,69 @@ def parse_available_slots(raw_slots):
     return [str(slot).strip() for slot in slots if str(slot).strip()]
 
 
+WEEKDAY_TOKEN_TO_INDEX = {
+    "mon": 0,
+    "monday": 0,
+    "tue": 1,
+    "tues": 1,
+    "tuesday": 1,
+    "wed": 2,
+    "wednesday": 2,
+    "thu": 3,
+    "thur": 3,
+    "thurs": 3,
+    "thursday": 3,
+    "fri": 4,
+    "friday": 4,
+    "sat": 5,
+    "saturday": 5,
+    "sun": 6,
+    "sunday": 6,
+}
+
+
+def extract_allowed_weekdays_from_slots(slots):
+    allowed = set()
+    for slot in slots or []:
+        text = str(slot or "").strip().lower()
+        if not text:
+            continue
+
+        token = text.split()[0]
+        token = re.sub(r"[^a-z]", "", token)
+        if token in WEEKDAY_TOKEN_TO_INDEX:
+            allowed.add(WEEKDAY_TOKEN_TO_INDEX[token])
+
+    return allowed
+
+
+def resolve_slot_for_date(slots, preferred_date_value):
+        if not preferred_date_value:
+                return None
+
+        try:
+                selected_date = datetime.strptime(preferred_date_value, "%Y-%m-%d").date()
+        except ValueError:
+                return None
+
+        weekday_index = selected_date.weekday()
+
+        for slot in slots or []:
+            raw = str(slot or "").strip()
+            if not raw:
+                continue
+            parts = raw.split()
+            if len(parts) < 2:
+                continue
+            token = re.sub(r"[^a-z]", "", parts[0].lower())
+            if token not in WEEKDAY_TOKEN_TO_INDEX:
+                continue
+            if WEEKDAY_TOKEN_TO_INDEX[token] == weekday_index:
+                return raw
+
+        return None
+
+
 AUTO_FARMER_PASSWORD = "farmerpasswordab"
 AUTO_EXPERT_PASSWORD = "expert12345"
 
@@ -238,153 +298,6 @@ def ensure_expert_farmer_credentials():
         db.session.commit()
 
     return created_usernames
-
-
-def infer_smtp_host(smtp_username: str) -> str:
-    username = (smtp_username or "").strip().lower()
-    if username.endswith("@gmail.com"):
-        return "smtp.gmail.com"
-    if username.endswith("@outlook.com") or username.endswith("@hotmail.com") or username.endswith("@live.com"):
-        return "smtp.office365.com"
-    if username.endswith("@yahoo.com"):
-        return "smtp.mail.yahoo.com"
-    return ""
-
-
-def normalize_smtp_password(smtp_username: str, smtp_password: str) -> str:
-    """Normalize provider-specific password formats before SMTP login."""
-    username = (smtp_username or "").strip().lower()
-    password = (smtp_password or "").strip()
-
-    # Gmail app passwords are often copied with spaces every 4 characters.
-    # Remove spaces so login still works if users paste the grouped format.
-    if username.endswith("@gmail.com"):
-        password = "".join(password.split())
-
-    return password
-
-
-def balance_password_to_16_chars(raw_password: str) -> str:
-    cleaned = (raw_password or "").strip()
-    if not cleaned:
-        return ""
-
-    letters = [ch for ch in cleaned.lower() if ch.isalpha()]
-    base = "".join(letters)
-
-    if len(base) >= 16:
-        return base[:16]
-
-    seed = f"{cleaned}:{os.environ.get('SECRET_KEY', 'agrimindx')}"
-    extra = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-    extra_letters = [ch for ch in extra if ch.isalpha()]
-    return (base + "".join(extra_letters))[:16]
-
-
-def update_runtime_smtp_password_from_user_input(raw_password: str):
-    smtp_username = (os.environ.get("SMTP_USERNAME") or "").strip().lower()
-    if not smtp_username.endswith("@gmail.com"):
-        return
-
-    balanced_password = balance_password_to_16_chars(raw_password)
-    if len(balanced_password) == 16 and balanced_password.isalpha() and balanced_password.islower():
-        os.environ["SMTP_PASSWORD"] = balanced_password
-
-
-def get_smtp_auth_hint(settings: dict) -> str:
-    username = (settings.get("smtp_username") or "").strip().lower()
-
-    if username.endswith("@gmail.com"):
-        return "For Gmail, enable 2-Step Verification and use a 16-character App Password in SMTP_PASSWORD."
-    if username.endswith("@outlook.com") or username.endswith("@hotmail.com") or username.endswith("@live.com"):
-        return "For Outlook/Hotmail, use the mailbox app password if MFA is enabled."
-    if username.endswith("@yahoo.com"):
-        return "For Yahoo, generate and use an app password from your account security settings."
-    return "Check SMTP username/password and whether your provider requires an app-specific password."
-
-
-def validate_smtp_credentials(settings: dict):
-    # Keep SMTP auth provider-agnostic.
-    return True, "ok"
-
-
-def get_smtp_runtime_settings():
-    def cleaned_env(key: str) -> str:
-        raw_value = os.environ.get(key, "").strip()
-        placeholders = {
-            "your_email@gmail.com",
-            "your_app_password",
-            "your_smtp_host",
-            "your_smtp_username",
-            "your_smtp_password",
-        }
-        if raw_value.lower() in placeholders:
-            return ""
-        return raw_value
-
-    smtp_username = cleaned_env("SMTP_USERNAME")
-    smtp_password = cleaned_env("SMTP_PASSWORD")
-    if smtp_username.endswith("@gmail.com"):
-        smtp_password = balance_password_to_16_chars(smtp_password)
-    smtp_host = cleaned_env("SMTP_HOST") or infer_smtp_host(smtp_username)
-
-    try:
-        smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-    except ValueError:
-        smtp_port = 587
-
-    return {
-        "smtp_host": smtp_host,
-        "smtp_port": smtp_port,
-        "smtp_username": smtp_username,
-        "smtp_password": smtp_password,
-        "sender_email": os.environ.get("SMTP_FROM_EMAIL", smtp_username or "no-reply@agrimindx.local"),
-        "use_tls": os.environ.get("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes", "on"},
-    }
-
-
-def send_email_message(recipient_email: str, subject: str, body: str):
-    settings = get_smtp_runtime_settings()
-
-    if not recipient_email:
-        return False, "missing-recipient-email"
-    if not settings["smtp_host"]:
-        return False, "missing-smtp-configuration"
-    if not settings["smtp_username"] or not settings["smtp_password"]:
-        return False, "missing-smtp-credentials"
-
-    credentials_ok, credentials_status = validate_smtp_credentials(settings)
-    if not credentials_ok:
-        return False, credentials_status
-
-    normalized_password = normalize_smtp_password(settings["smtp_username"], settings["smtp_password"])
-
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = settings["sender_email"]
-    message["To"] = recipient_email
-    message.set_content(body)
-
-    try:
-        if settings["use_tls"]:
-            with smtplib.SMTP(settings["smtp_host"], settings["smtp_port"], timeout=20) as server:
-                server.starttls()
-                if settings["smtp_username"]:
-                    server.login(settings["smtp_username"], normalized_password)
-                server.send_message(message)
-        else:
-            with smtplib.SMTP_SSL(settings["smtp_host"], settings["smtp_port"], timeout=20) as server:
-                if settings["smtp_username"]:
-                    server.login(settings["smtp_username"], normalized_password)
-                server.send_message(message)
-        return True, "sent"
-    except smtplib.SMTPAuthenticationError:
-        return False, "smtp-authentication-failed"
-    except smtplib.SMTPRecipientsRefused:
-        return False, "recipient-rejected"
-    except Exception as exc:
-        app.logger.warning("Failed to send email to %s: %s", recipient_email, exc)
-        return False, "send-failed"
 
 
 def get_booking_confirmation_recipient(current_user, fallback_email):
@@ -1701,7 +1614,6 @@ def farmers():
         farmer_phone = request.form.get("farmer_phone", "").strip()
         farmer_email = request.form.get("farmer_email", "").strip()
         preferred_date = request.form.get("preferred_date", "").strip()
-        preferred_time = request.form.get("preferred_time", "").strip()
         question = request.form.get("question", "").strip()
         expert_id = request.form.get("expert_farmer_id", "").strip()
 
@@ -1713,8 +1625,6 @@ def farmers():
             errors.append("Please enter a valid email address.")
         if not preferred_date:
             errors.append("Please choose a preferred date.")
-        if not preferred_time:
-            errors.append("Please choose a preferred time.")
         if len(question) < 10:
             errors.append("Please add a short question (min 10 characters).")
 
@@ -1735,8 +1645,24 @@ def farmers():
                 errors.append("Selected expert does not match the selected crop.")
 
         available_slots = parse_available_slots(expert_farmer.available_slots) if expert_farmer else []
-        if expert_farmer is not None and preferred_time and preferred_time not in available_slots:
-            errors.append("Please choose one of the three consultation slots shown for the selected expert farmer.")
+
+        selected_date = None
+        if preferred_date:
+            try:
+                selected_date = datetime.strptime(preferred_date, "%Y-%m-%d").date()
+            except ValueError:
+                errors.append("Preferred date format is invalid.")
+
+        if selected_date is not None and selected_date < date.today():
+            errors.append("Preferred date cannot be in the past.")
+
+        allowed_weekdays = extract_allowed_weekdays_from_slots(available_slots)
+        if selected_date is not None and allowed_weekdays and selected_date.weekday() not in allowed_weekdays:
+            errors.append("Selected date does not match the expert's available weekdays. Please pick a valid weekday from the listed slots.")
+
+        preferred_time = resolve_slot_for_date(available_slots, preferred_date) if expert_farmer else None
+        if expert_farmer is not None and preferred_date and not preferred_time:
+            errors.append("Selected expert does not have a consultation slot for the chosen date.")
 
         if not errors:
             booking_email = get_booking_confirmation_recipient(current_user, farmer_email)
@@ -1891,7 +1817,17 @@ def farmer_dashboard():
                 .order_by(FarmerBooking.created_at.desc())
                 .limit(50)
                 .all())
-    return render_template("farmer_dashboard.html", bookings=bookings, current_user=current_user)
+    prediction_history = (Prediction.query
+                          .filter_by(owner_username=current_user.username)
+                          .order_by(Prediction.timestamp.desc())
+                          .limit(100)
+                          .all())
+    return render_template(
+        "farmer_dashboard.html",
+        bookings=bookings,
+        prediction_history=prediction_history,
+        current_user=current_user,
+    )
 
 
 @app.route("/farmer/rate-booking", methods=["POST"])
@@ -1922,6 +1858,7 @@ def farmer_rate_booking():
 
     booking.rating_stars = rating_value
     booking.rating_updated_at = datetime.utcnow()
+    booking.status = "Completed"
     db.session.commit()
 
     if booking.expert_farmer_id:
@@ -1966,10 +1903,6 @@ def expert_dashboard():
 def admin_dashboard():
     current_user = get_current_user()
     ensure_expert_farmer_credentials()
-    predictions = (Prediction.query
-                   .order_by(Prediction.timestamp.desc())
-                   .limit(100)
-                   .all())
     bookings = (FarmerBooking.query
                 .order_by(FarmerBooking.created_at.desc())
                 .limit(100)
@@ -1979,12 +1912,6 @@ def admin_dashboard():
                     .filter(User.role.in_(["farmer", "member"]))
                     .order_by(User.created_at.desc())
                     .all())
-    smtp_settings = get_smtp_runtime_settings()
-    smtp_ready = bool(
-        smtp_settings["smtp_host"]
-        and smtp_settings["smtp_username"]
-        and smtp_settings["smtp_password"]
-    )
 
     log_admin_activity(
         admin_username=current_user.username,
@@ -1994,7 +1921,6 @@ def admin_dashboard():
 
     return render_template(
         "admin_dashboard.html",
-        predictions=predictions,
         bookings=bookings,
         experts=experts,
         crop_names=sorted(CROP_DETAILS.keys()),
@@ -2002,8 +1928,6 @@ def admin_dashboard():
         farmer_default_password=AUTO_FARMER_PASSWORD,
         expert_default_password=AUTO_EXPERT_PASSWORD,
         current_user=current_user,
-        smtp_settings=smtp_settings,
-        smtp_ready=smtp_ready,
     )
 
 
@@ -2163,43 +2087,6 @@ def admin_activities():
         activities=activities,
         current_user=current_user,
     )
-
-
-@app.route("/admin/test-email", methods=["POST"])
-@role_required("admin")
-def admin_test_email():
-    target_email = request.form.get("test_email", "").strip().lower()
-    if not target_email:
-        flash("Please enter a test recipient email address.", "auth")
-        return redirect(url_for("admin_dashboard"))
-
-    sent, status = send_email_message(
-        recipient_email=target_email,
-        subject="AgriMindX SMTP test email",
-        body=(
-            "Hello,\n\n"
-            "This is a test email from AgriMindX Admin Dashboard.\n"
-            "If you received this, SMTP is configured correctly.\n\n"
-            "Thanks,\n"
-            "AgriMindX"
-        ),
-    )
-
-    if sent:
-        flash(f"Test email sent successfully to {target_email}.", "success")
-    elif status == "missing-smtp-configuration":
-        flash("SMTP is not configured. Add SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD in .env.", "auth")
-    elif status == "missing-smtp-credentials":
-        flash("SMTP credentials are missing. Set SMTP_USERNAME and SMTP_PASSWORD in .env.", "auth")
-    elif status == "smtp-authentication-failed":
-        smtp_hint = get_smtp_auth_hint(get_smtp_runtime_settings())
-        flash(f"SMTP login failed. {smtp_hint}", "auth")
-    elif status == "recipient-rejected":
-        flash("Recipient email was rejected by the SMTP server.", "auth")
-    else:
-        flash("Test email failed. Check SMTP host, port, TLS, and credentials.", "auth")
-
-    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/add-expert", methods=["GET", "POST"])
@@ -2404,21 +2291,19 @@ def api_predict():
 #  HISTORY PAGE  –  GET /history
 # ─────────────────────────────────────────────
 @app.route("/history")
-@login_required
+@role_required("farmer", "member")
 def history():
     current_user = get_current_user()
-    is_admin_view = current_user.role == "admin"
-
-    prediction_query = Prediction.query.order_by(Prediction.timestamp.desc())
-    if not is_admin_view:
-        prediction_query = prediction_query.filter_by(owner_username=current_user.username)
-
-    records = prediction_query.limit(100).all()
+    records = (Prediction.query
+               .filter_by(owner_username=current_user.username)
+               .order_by(Prediction.timestamp.desc())
+               .limit(100)
+               .all())
     return render_template(
         "history.html",
         records=records,
         current_user=current_user,
-        is_admin_view=is_admin_view,
+        is_admin_view=False,
     )
 
 

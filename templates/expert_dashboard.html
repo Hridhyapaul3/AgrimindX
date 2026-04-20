@@ -94,12 +94,19 @@
           <tr>
             <td>{{ loop.index }}</td>
             <td>{{ b.created_by_username if b.created_by_username else 'N/A' }}</td>
-            <td>{{ b.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td>{{ b.created_at | localtime('%Y-%m-%d %H:%M') }}</td>
             <td>{{ b.farmer_name }}</td>
             <td>{{ b.farmer_phone }}</td>
             <td>{{ b.farmer_email }}</td>
             <td>{{ b.crop }}</td>
-            <td>{{ b.preferred_date }} {{ b.preferred_time }}</td>
+            <td>
+              {{ b.preferred_date }}
+              {% if b.preferred_time and ' ' in b.preferred_time %}
+                {{ b.preferred_time.split(' ', 1)[1] }}
+              {% else %}
+                {{ b.preferred_time }}
+              {% endif %}
+            </td>
             <td><span class="badge">{{ b.status }}</span></td>
             <td>
               {% if b.rating_stars %}
